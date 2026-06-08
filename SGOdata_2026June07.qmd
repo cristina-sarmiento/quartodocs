@@ -1,0 +1,797 @@
+---
+title: "Social Group Overhypothesis"
+format: html
+editor: visual
+author: Cristina Sarmiento 
+mainfont: Garamond
+monofont: Roboto
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project:
+  type: website
+  output-dir: docs
+---
+
+```{r}
+#| echo: false
+#| include: false
+
+library(tidyverse)
+library(psych)
+library(lmerTest)
+library(lme4)
+library(sjstats)
+library(ggplot2)
+library(ggthemes)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(emmeans)
+library(simr)
+library(rstatix)
+library(performance)
+library(gt)
+library(knitr)
+library(sjPlot)
+
+SGOdata <- read.csv("/Users/csarmiento/Downloads/SGO_Data_2026JUNE05.csv")
+head(SGOdata)
+summary(SGOdata$Age) 
+describe(SGOdata$Age)
+head(SGOdata)
+
+SGOdata$Expected1 <- as.numeric(SGOdata$Expected1)
+
+SGOdata_L <- SGOdata %>% 
+    select(SubID, Age, Gender, Condition, ExclusionCriteria, Expected1, Unexpected1, Expected2, Unexpected2) %>%
+    pivot_longer(cols = c(Expected1, Unexpected1, Expected2,
+    Unexpected2), 
+      names_to = "Test_Trial",
+      values_to = "Looking_Time") %>%
+      extract(Test_Trial, into = c("Test_Trial", "Test_Pair"),
+      regex = "([A-Za-z]+)(\\d+)")
+
+SGOdata_L <- SGOdata_L[1:436,]
+```
+
+## Research Questions and Hypotheses
+
+**Broad Research Question:** Are overhypothesis abilities domain-general? Can infants make overhypotheses about social groups?
+
+**Study Specific Research Question:** Can infants form an overhypothesis after receiving limited evidence of three social groups on a fourth social group?
+
+**H0:** Infants cannot form an overhypothesis on a fourth social group. Infants will show equal looking towards the test events in both the Experimental condition and the Control condition. 
+
+**H1:** Infants can form an overhypothesis on a fourth social group. Infants will show longer looking towards the unexpected test events in the Experimental condition while infants in the Control condition will show equal looking towards the test events. 
+
+## Methods
+
+```{r, Descriptives}
+#| echo: false
+SGOdata_L_n_total <- SGOdata_L %>%
+  summarize(n = n_distinct(SubID)) 
+
+kable(
+  SGOdata_L_n_total,
+  col.names = "Total Tested Participants"
+)
+
+SGOdata_L <- SGOdata_L %>% 
+mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control", ""))
+
+SGOdata_L_n_totalC <- SGOdata_L %>%
+  group_by(Condition) %>% 
+  summarize(n = n_distinct(SubID),
+            mean_age = mean(Age, na.rm = TRUE), 
+            median_age = median(Age, na.rm = TRUE), 
+            sd_age = sd(Age), 
+            min_age = min(Age), 
+            max_age = max(Age, na.rm = TRUE))
+
+kable(
+  SGOdata_L_n_totalC,
+  caption = "Table 1. Age Descriptives of Participants by Condition"
+)
+```
+
+There are two participants who were tested but did not make it to the test trials and thus, not assigned to a Condition (the blank row in Condition).
+
+```{r}
+#| echo: false
+
+SGO_exclusion_table <- SGOdata_L %>%
+  mutate(
+    ExclusionType = case_when(
+      str_detect(ExclusionCriteria, "fuss") ~ "Fuss-Out",
+      str_detect(ExclusionCriteria, "incomplete|viewable|technical|not complete") ~ "Incomplete",
+      str_detect(ExclusionCriteria, "pause|stop") ~ "Pause/Stop",
+      str_detect(ExclusionCriteria, "duplicate") ~ "Duplicate",
+      str_detect(ExclusionCriteria, "inattentive") ~ "Inattentive",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(is.na(Looking_Time)) %>%
+  group_by(ExclusionType) %>%
+  summarise(
+    "Number of NA Trials" = n(),
+    "Affected Participants" = n_distinct(SubID),
+    .groups = "drop"
+  )
+
+kable(SGO_exclusion_table,
+      caption = "Table 2. Participant Based Exclusions")
+
+```
+
+Participants were excluded if they were fussy throughout the study, inattentive throughout the study, had technical errors, or had participated previously, resulting in N = 96.
+
+Due to the online unmoderated nature of this study, trial durations are fixed while in-person studies are typically infant-controlled and end once the participant has looked away for 2 or more consecutive seconds. If a participant looks for the full trial duration in our study, we do not know how much longer they would've looked to reach the 2s look away criteron if they were given more time. Therefore, trials were then excluded if a participant looked more than 18 of the 20 seconds in a trial.
+
+```{r}
+#| echo: false
+#| include: false
+
+##=20 <2s
+ SGOdata_L2 <- SGOdata_L %>%
+  mutate(Looking_Time = ifelse(Looking_Time == 20 | Looking_Time < 2, NA, Looking_Time))
+
+ 
+ ##>18, 2s<
+  SGOdata_LE <- SGOdata_L %>%
+  mutate(Looking_Time = ifelse(Looking_Time > 18 | Looking_Time < 2, NA, no = Looking_Time))
+  
+  
+##Test Pair Exclusions
+   exclude <- SGOdata_LE %>%
+  group_by(SubID, Test_Pair) %>%
+  filter(any(is.na(Looking_Time))) %>%
+  ungroup() %>%
+  select(SubID, Test_Pair)
+SGOdata_LEP <- SGOdata_LE %>%
+  anti_join(exclude, by = c("SubID", "Test_Pair"))
+
+##Full Data
+SGOdata_LEP_full <- SGOdata_LEP %>%
+  group_by(SubID) %>% 
+  filter(all(c(1,2) %in% Test_Pair)) %>% 
+  ungroup() 
+
+```
+
+```{r}
+#| echo: false
+ SGO_exclusion_table2 <- SGOdata_L %>%
+  mutate(
+    ExclusionType = case_when(
+     # Looking_Time == 20 ~ "Max Out 20s",
+      Looking_Time > 18 ~ "Max Out 18s>",
+      Looking_Time < 2 ~ "Inattentive <2s",
+      TRUE ~ "Remainder of Trials"
+    )
+  ) %>%
+  group_by(ExclusionType) %>%
+  summarise(
+    "Total Trials" = n(),
+    "Participants Affected" = n_distinct(SubID),
+    .groups = "drop"
+  )
+
+kable(SGO_exclusion_table2,
+      caption = "Table 3. Data Based Exclusions")
+
+```
+
+The last row just takes into account the rest of the trials that did not meet the exclusion criteria.
+
+```{r}
+#| echo: false
+
+SGOdata_LE_clean <- SGOdata_LE %>% 
+  group_by(SubID) %>% 
+  filter(!all(is.na(Looking_Time))) %>% 
+  ungroup()
+
+SGOdata_LEclean_n_total <- SGOdata_LE_clean %>%
+  summarize(n = n_distinct(SubID)) 
+
+kable(
+  SGOdata_LEclean_n_total,
+  col.names = "Total Participants after Exclusions"
+)
+
+SGOdata_LEclean <- SGOdata_LE_clean %>% 
+mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control", ""))
+
+SGOdata_LEclean_n_totalC <- SGOdata_LEclean %>%
+  group_by(Condition) %>% 
+  summarize(n = n_distinct(SubID),
+            mean_age = mean(Age, na.rm = TRUE), 
+            median_age = median(Age, na.rm = TRUE), 
+            sd_age = sd(Age), 
+            min_age = min(Age), 
+            max_age = max(Age, na.rm = TRUE))
+
+kable(
+  SGOdata_LEclean_n_totalC,
+  caption = "Table 4. Age Descriptives of Participants by Condition After Exclusions"
+)
+
+```
+
+Lastly, in order to directly compare a participant's looking towards both types of test trials (Expected vs Unexpected), only participants with at least a Complete Test Pair were included in the data.
+
+```{r}
+#| echo: false
+
+
+SGOdata_LEP_n_total <- SGOdata_LEP %>%
+  summarize(n = n_distinct(SubID)) 
+
+kable(
+  SGOdata_LEP_n_total,
+  col.names = "Total Participants with Complete Test Pair(s)"
+)
+
+SGOdata_LEP <- SGOdata_LEP %>% 
+mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control"))
+
+SGOdata_LEP_n_totalC <- SGOdata_LEP %>%
+  group_by(Condition) %>% 
+  summarize(n = n_distinct(SubID),
+            mean_age = mean(Age, na.rm = TRUE), 
+            median_age = median(Age, na.rm = TRUE), 
+            sd_age = sd(Age), 
+            min_age = min(Age), 
+            max_age = max(Age, na.rm = TRUE))
+
+kable(
+  SGOdata_LEP_n_totalC,
+  caption = "Table 5. Age Descriptives of Participants with Complete Test Pair(s)"
+)
+```
+
+## Results
+
+Results are separated in tabs based on the data.
+
+[The first tab "Data with Complete Test Pairs"]{.underline} contains the graphs and analyses for the data of participants with complete test pairs. This is the level of data we have been looking at.
+
+[The second tab "Data with Raw Data"]{.underline} is all the data points from participants. Trials ended after a 2s consectutive look away criteria or until the 20s had elapsed. I've included this as a reference point, but there are no differences in looking across Test Trials or Conditions.
+
+[The third tab "Data After Exclusions"]{.underline} is all the data from participants with at least one data point after the exclusion criteria. This is what the data would look like if we did not apply the max out criterion of excluding participants who looked for more than 18s out of 20s trial. There are no significant differences across Test Trials or Condition.
+
+[The fourth tab "Data with Complete Data"]{.underline} is data from participants who provided data for each trial and test pair after the exclusion criteria. Results are also nonsignificant, but may be due to being underpowered.
+
+::: panel-tabset
+## Data with Complete Test Pairs Only
+
+**Does looking towards the Unexpected and Expected Test Trials differ by Condition?**
+
+Participants who had at least one complete test pair of data were included, resulting in 35 participants in the Experimental Condition and 30 participants in the Control Condition. 
+```{r}
+#| echo: false
+#| include: false
+mod_SGO <- lmer(Looking_Time ~ Test_Trial*Test_Pair*Condition*Age + (1|SubID),
+                data = SGOdata_LEP, REML = FALSE)
+summary(mod_SGO)
+
+mod_SGO2 <- lmer(Looking_Time ~ Test_Trial*Condition*Age + (1|SubID),
+                data = SGOdata_LEP, REML = FALSE)
+summary(mod_SGO2)
+
+mod_SGO3 <- lmer(Looking_Time ~ Test_Trial*Condition + (1|SubID),
+                data = SGOdata_LEP, REML = FALSE)
+summary(mod_SGO3)
+
+```
+
+A mixed effects model was used to test an interaction effect of Test Trial, Test Pair, Condition, and Age on Looking Time with the Participant as a random effect: Looking Time \~ Test Trial \* Condition \* Age + (1\|SubID).
+
+```{r}
+#| echo: false
+tab_model(mod_SGO) 
+
+```
+
+The following graph depicts the data of average looking across the two Test Trials, Test Pairs, and Conditions.
+
+```{r}
+#| echo: false
+SGOdata_LEP %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+  mutate(Condition = factor(Condition,
+                            levels = c("Experimental", "Control"),
+                            labels = c("Experimental Condition", "Control Condition")
+                            )) %>% 
+ggplot(aes(Test_Pair, Looking_Time, fill = Test_Trial)) +
+  facet_wrap(~Condition) +
+stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9)) +
+stat_summary(fun.data = mean_se, geom = "errorbar",
+  position = position_dodge(0.9), width = 0.2) + 
+  labs(
+    x = "Test Pair",
+    y = "Average Looking Time (s)"
+   # fill = "Outcome Type"
+    ) +
+  scale_y_continuous(
+    breaks = c(0, 4, 8, 12)) +
+   theme(plot.title = element_text(hjust = 0.5), 
+        plot.caption = element_text(hjust = 0, size = 10),
+        legend.position = "none") +
+  theme(text = element_text(family = "Georgia")) +
+        scale_fill_manual(values = c("midnightblue", "pink")) +
+        stat_summary(fun = mean, geom = "point",
+        shape = 18, size = 3, color = "red",
+        position = position_dodge(0.9))
+```
+
+There were no significant interactions so Test Pair was dropped from the model. A mixed effects model was run to test the interaction effect of Test Trial \* Condition \* Age on Looking Time with the Participant as a random effect: Looking Time \~ Test Trial \* Condition \*Age + (1\|SubID). The graph below shows Age effects in Looking Time across Test Trials and Conditions.
+
+```{r}
+#| echo: false
+#| warning: false
+tab_model(mod_SGO2) 
+
+
+SGOdata_LEP %>% 
+mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+    mutate(Condition = factor(Condition,
+                            levels = c("Experimental", "Control"),
+                            labels = c("Experimental Condition", "Control Condition")
+                            )) %>% 
+ggplot(aes(x = Age, y = Looking_Time, color = Test_Trial)) +
+  facet_wrap(~Condition) +
+  geom_point(alpha = 0.2) + 
+  geom_smooth(method = "lm", se = TRUE) + 
+  scale_color_manual(values = c("Expected" = "midnightblue", "Unexpected" = "hotpink")) +
+  labs(
+    title = "Looking Time Across Age by Test Trial",
+    x = "Age (Months)",
+    y = "Looking Time (s)",
+    color = "Test Outcome"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5), plot.caption = element_text(hjust = 0)) +
+   theme(text = element_text(family = "Georgia")) 
+
+```
+
+There was a marginally significant interaction of Age and Condition and no significant interaction of Test Trial \* Age or Test Trial \* Age \* Condition. Therefore, Age was dropped from the model and ran again.
+
+Mixed effects model investigating the interaction effect of Test Trial \* Condition on Looking Time with the Participant as a random effect: Looking Time \~ Test Trial\*Condition + (1\|SubID).
+
+```{r}
+#| echo: false
+tab_model(mod_SGO3)
+```
+
+The graph below depicts the average looking for each test trial type (Expected vs Unexpected) within each Condition.
+
+```{r}
+#| echo: false
+SGOdata_LEP %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+ggplot(aes(Test_Trial, Looking_Time)) +
+  facet_wrap(~Condition) +
+  stat_summary(fun = mean, geom = "bar", aes(fill=Test_Trial),
+               position = position_dodge(0.9)) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.9), width = 0.2) +  
+  labs( 
+       x = "Test Outcome", 
+       y = "Average Looking Time (s)") + 
+  coord_cartesian(ylim = c(0,12)) +
+  scale_y_continuous(breaks = c(0,4,8,12)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "none") +
+  theme(text = element_text(family = "Georgia")) +
+  scale_fill_manual(values = c("midnightblue", "pink")) +
+  stat_summary(fun = mean, geom = "point", 
+               shape = 18, size = 3, color = "red", 
+               position = position_dodge(0.9))  
+
+```
+
+**Further Analyses**
+
+```{r}
+#| echo: false
+#| include: false
+SGOdata_LEP_Experimental <- SGOdata_LEP %>% 
+  group_by(SubID) %>% 
+  filter(all(c("Experimental") %in% Condition)) %>% 
+   ungroup() 
+
+SGOdata_LEP_Control <- SGOdata_LEP %>% 
+  group_by(SubID) %>% 
+  filter(all(c("Control") %in% Condition)) %>% 
+   ungroup() 
+
+
+SGOdata_LEP_Experimental_wider <- 
+ pivot_wider(SGOdata_LEP_Experimental, 
+             names_from = c(Test_Trial,Test_Pair),
+             values_from = Looking_Time) 
+
+
+SGOdata_LEP_Experimental_wider <- 
+  SGOdata_LEP_Experimental_wider %>% 
+  rowwise() %>%
+  mutate(meanExpected = mean(c_across(c(Expected_1, Expected_2)), na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_Experimental_wider <- 
+  SGOdata_LEP_Experimental_wider %>% 
+  rowwise() %>%
+  mutate(meanUnexpected = mean(c_across(c(Unexpected_1, Unexpected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_Experimental_longer <-
+  SGOdata_LEP_Experimental_wider %>% 
+   pivot_longer(cols = c(meanExpected, meanUnexpected), 
+      names_to = "Test_Trial",
+      values_to = "Looking_Time") 
+
+SGOdata_LEP_Experimental_wider <-SGOdata_LEP_Experimental_wider %>% 
+ rowwise() %>%
+  mutate(AvgLooking = mean(c_across(c(Unexpected_1, Unexpected_2, Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+      
+wilcox.test(Looking_Time ~ Test_Trial, data=SGOdata_LEP_Experimental_longer) 
+wilcox.test(SGOdata_LEP_Experimental_wider$meanExpected, SGOdata_LEP_Experimental_wider$meanUnexpected, paired = TRUE)
+
+
+```
+
+The previous models yielded nonsignificant results. To better examine the data, non-parameteric tests were calculated for each condition to see if there are significant differences between the Expected test trials and Unexpected test trials.
+
+```{r}
+#| echo: false
+#| include: false
+SGOdata_LEP_Control_wider <- 
+ pivot_wider(SGOdata_LEP_Control, 
+             names_from = c(Test_Trial,Test_Pair),
+             values_from = Looking_Time) 
+
+
+SGOdata_LEP_Control_wider <- 
+  SGOdata_LEP_Control_wider %>% 
+  rowwise() %>%
+  mutate(meanExpected = mean(c_across(c(Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_Control_wider <- 
+  SGOdata_LEP_Control_wider %>% 
+  rowwise() %>%
+  mutate(meanUnexpected = mean(c_across(c(Unexpected_1, Unexpected_2)), na.rm = T )) %>%
+  ungroup()
+
+SGOdata_LEP_Control_wider <-SGOdata_LEP_Control_wider %>% 
+ rowwise() %>%
+  mutate(AvgLooking = mean(c_across(c(Unexpected_1, Unexpected_2, Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_Control_longer <-
+  SGOdata_LEP_Control_wider %>% 
+   pivot_longer(cols = c(meanExpected, meanUnexpected), 
+      names_to = "Test_Trial",
+      values_to = "Looking_Time")
+
+
+```
+
+**Non-parameteric test Experimental Condition**
+
+```{r}
+#| echo: false
+wilcox.test(SGOdata_LEP_Experimental_wider$meanExpected, SGOdata_LEP_Experimental_wider$meanUnexpected, paired = TRUE)
+
+```
+
+**Non-parameteric test Control Condition**
+
+```{r}
+#| echo: false
+wilcox.test(SGOdata_LEP_Control_wider$meanExpected, SGOdata_LEP_Control_wider$meanUnexpected, paired = TRUE)
+```
+
+Overall, results show that there is a marginally significant trend of longer looking towards the Unexpected Test trials than the Expected Test trials in the Experimental Condition and no difference in looking in the Control condition.
+
+## Raw Data
+Ninety-six participants contributed at least one trial of data, 51 in the Experimental Condition and 45 in the Control Condition. There were no significant differences in looking in the Test Trials in either Condition.
+
+```{r}
+#| echo: false
+#| warning: false
+
+#Across Test Pairs
+SGOdata_L <- SGOdata_L %>% 
+  filter(Condition != "")
+
+SGOdata_L %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+  mutate(Condition = factor(Condition,
+                            levels = c("Experimental", "Control"),
+                            labels = c("Experimental Condition", "Control Condition")
+                            )) %>% 
+ggplot(aes(Test_Pair, Looking_Time, fill = Test_Trial)) +
+  facet_wrap(~Condition) +
+stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9)) +
+stat_summary(fun.data = mean_se, geom = "errorbar",
+  position = position_dodge(0.9), width = 0.2) + 
+  labs(
+    x = "Test Pair",
+    y = "Average Looking Time (s)",
+    fill = "Test Trial Type"
+    ) +
+ coord_cartesian(ylim = c(0,16)) +
+  scale_y_continuous(breaks = c(0,4,8,12,16)) +
+   theme(plot.title = element_text(hjust = 0.5), 
+        plot.caption = element_text(hjust = 0, size = 10),
+        legend.position = "right") +
+  theme(text = element_text(family = "Georgia")) +
+        scale_fill_manual(values = c("midnightblue", "pink")) +
+        stat_summary(fun = mean, geom = "point",
+        shape = 18, size = 3, color = "red",
+        position = position_dodge(0.9))
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#Collapsed
+SGOdata_L <- SGOdata_L %>% 
+  filter(Condition != "")
+
+SGOdata_L2 <- SGOdata_L2 %>% 
+  filter(Condition != "")
+
+SGOdata_L %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+ggplot(aes(Condition, Looking_Time, fill = Test_Trial)) +
+  stat_summary(fun = mean, geom = "bar", aes(fill=Test_Trial),
+               position = position_dodge(0.9)) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.9), width = 0.2) +  
+  labs(title = "Raw Data Looking Time Across Conditions", 
+       x = "Condition", 
+       y = "Looking Time (s)",
+       fill = "Test Trial Type") +
+  coord_cartesian(ylim = c(0,16)) +
+  scale_y_continuous(breaks = c(0,4,8,12,16)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "right") +
+  theme(text = element_text(family = "Georgia")) +
+  scale_fill_manual(values = c("midnightblue", "pink")) +
+  stat_summary(fun = mean, geom = "point", 
+               shape = 18, size = 3, color = "red", 
+               position = position_dodge(0.9))  
+
+```
+
+
+## Data with Exclusions
+
+Trials were excluded for the following criteria:
+
+-   If a participant did not look for 2 consecutive seconds in a trial
+-   If a participant looked more than 18 of the 20 seconds in a trial
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+SGOdata_LE_clean %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+ggplot(aes(Condition, Looking_Time, fill = Test_Trial)) +
+  stat_summary(fun = mean, geom = "bar", aes(fill=Test_Trial),
+               position = position_dodge(0.9)) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.9), width = 0.2) +  
+  labs(title = "Data with Exclusions collapsed across Test Pairs", 
+       x = "Condition", 
+       y = "Looking Time (s)") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "right") +
+  theme(text = element_text(family = "Georgia")) +
+  scale_fill_manual(values = c("midnightblue", "pink")) +
+  stat_summary(fun = mean, geom = "point", 
+               shape = 18, size = 3, color = "red", 
+               position = position_dodge(0.9))  
+
+#Across test pairs
+SGOdata_LE_clean %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+ggplot(aes(Test_Pair, Looking_Time, fill = Test_Trial)) +
+  facet_wrap(~Condition) +
+stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9)) +
+stat_summary(fun.data = mean_se, geom = "errorbar",
+  position = position_dodge(0.9), width = 0.2) + 
+  labs(title = "Data with Exclusions of Looking 18s> and <2s",
+    x = "Test Pair",
+    y = "Mean Looking Time (s)") +
+   theme(plot.title = element_text(hjust = 0.5), 
+        legend.position = "right") +
+  theme(text = element_text(family = "Georgia")) +
+        scale_fill_manual(values = c("midnightblue", "pink")) +
+        stat_summary(fun = mean, geom = "point",
+        shape = 18, size = 3, color = "red",
+        position = position_dodge(0.9))
+
+
+
+```
+
+## Data with Complete Data
+
+Thirty-three participants provided a full set of data after exclusions, 16 in the Experimental Condition and 17 in the Control Condition. 
+
+```{r}
+SGOdata_LEP_full_n_totalC <- SGOdata_LEP_full %>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>% 
+  group_by(Condition) %>% 
+  summarize(n = n_distinct(SubID),
+            mean_age = mean(Age, na.rm = TRUE), 
+            median_age = median(Age, na.rm = TRUE), 
+            sd_age = sd(Age), 
+            min_age = min(Age), 
+            max_age = max(Age, na.rm = TRUE))
+
+kable(
+  SGOdata_LEP_full_n_totalC,
+  caption = "Age Descriptives of Participants by Condition With Complete Data"
+)
+```
+
+```{r}
+#| echo: false
+#| warning: false
+SGOdata_LEP_full%>%
+  mutate(Condition = fct_relevel(Condition, 
+            "Experimental", "Control")) %>%
+ggplot(aes(Test_Trial, Looking_Time, fill = Test_Trial)) +
+  facet_wrap(~Condition) +
+stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9)) +
+stat_summary(fun.data = mean_se, geom = "errorbar",
+  position = position_dodge(0.9), width = 0.2) + 
+  labs(title = "Data of Infants with Complete Set of Data",
+    x = "Test Outcome",
+    y = "Mean Looking Time (s)",
+    fill = "Test Outcome") +
+   # caption = captionF3) +
+  scale_y_continuous(
+    breaks = c(0, 4, 8, 12),
+    limits = c(0,12)) +
+   theme(plot.title = element_text(hjust = 0.5), 
+        plot.caption = element_text(hjust = 0, size = 10),
+        legend.position = "none") +
+  theme(text = element_text(family = "Georgia")) +
+        scale_fill_manual(values = c("midnightblue", "pink")) +
+        stat_summary(fun = mean, geom = "point",
+        shape = 18, size = 3, color = "red",
+        position = position_dodge(0.9))
+
+```
+
+```{r}
+#| echo: false
+#| include: false
+SGOdata_LEP_full_Experimental <- SGOdata_LEP_full %>% 
+  group_by(SubID) %>% 
+  filter(all(c("Experimental") %in% Condition)) %>% 
+   ungroup() 
+
+SGOdata_LEP_full_Control <- SGOdata_LEP_full %>% 
+  group_by(SubID) %>% 
+  filter(all(c("Control") %in% Condition)) %>% 
+   ungroup() 
+
+
+SGOdata_LEP_full_Experimental_wider <- 
+ pivot_wider(SGOdata_LEP_full_Experimental, 
+             names_from = c(Test_Trial,Test_Pair),
+             values_from = Looking_Time) 
+
+
+SGOdata_LEP_full_Experimental_wider <- 
+  SGOdata_LEP_full_Experimental_wider %>% 
+  rowwise() %>%
+  mutate(meanExpected = mean(c_across(c(Expected_1, Expected_2)), na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_full_Experimental_wider <- 
+  SGOdata_LEP_full_Experimental_wider %>% 
+  rowwise() %>%
+  mutate(meanUnexpected = mean(c_across(c(Unexpected_1, Unexpected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_full_Experimental_longer <-
+  SGOdata_LEP_full_Experimental_wider %>% 
+   pivot_longer(cols = c(meanExpected, meanUnexpected), 
+      names_to = "Test_Trial",
+      values_to = "Looking_Time") 
+
+SGOdata_LEP_full_Experimental_wider <-SGOdata_LEP_full_Experimental_wider %>% 
+ rowwise() %>%
+  mutate(AvgLooking = mean(c_across(c(Unexpected_1, Unexpected_2, Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+      
+wilcox.test(Looking_Time ~ Test_Trial, data=SGOdata_LEP_full_Experimental_longer) 
+wilcox.test(SGOdata_LEP_full_Experimental_wider$meanExpected, SGOdata_LEP_full_Experimental_wider$meanUnexpected, paired = TRUE)
+
+SGOdata_LEP_full_Control_wider <- 
+ pivot_wider(SGOdata_LEP_full_Control, 
+             names_from = c(Test_Trial,Test_Pair),
+             values_from = Looking_Time) 
+
+
+SGOdata_LEP_full_Control_wider <- 
+  SGOdata_LEP_full_Control_wider %>% 
+  rowwise() %>%
+  mutate(meanExpected = mean(c_across(c(Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_full_Control_wider <- 
+  SGOdata_LEP_full_Control_wider %>% 
+  rowwise() %>%
+  mutate(meanUnexpected = mean(c_across(c(Unexpected_1, Unexpected_2)), na.rm = T )) %>%
+  ungroup()
+
+SGOdata_LEP_full_Control_wider <-SGOdata_LEP_Control_wider %>% 
+ rowwise() %>%
+  mutate(AvgLooking = mean(c_across(c(Unexpected_1, Unexpected_2, Expected_1, Expected_2)),na.rm = T)) %>%
+  ungroup()
+
+SGOdata_LEP_full_Control_longer <-
+  SGOdata_LEP_full_Control_wider %>% 
+   pivot_longer(cols = c(meanExpected, meanUnexpected), 
+      names_to = "Test_Trial",
+      values_to = "Looking_Time")
+
+
+
+```
+
+**Model**
+```{r}
+#| echo: false
+#| include: false
+mod_SGO_full <- lmer(Looking_Time ~ Test_Trial*Test_Pair*Condition*Age + (1|SubID),
+                data = SGOdata_LEP_full, REML = FALSE)
+summary(mod_SGO_full)
+```
+
+```{r}
+tab_model(mod_SGO_full)
+```
+
+**Non-parametric Test in Experimental Condition**
+
+```{r}
+#| echo: false
+wilcox.test(SGOdata_LEP_full_Experimental_wider$meanExpected, SGOdata_LEP_full_Experimental_wider$meanUnexpected, paired = TRUE)
+
+
+```
+
+**Non-parametric Test in Control Condition**
+
+```{r}
+#| echo: false
+wilcox.test(SGOdata_LEP_full_Control_wider$meanExpected, SGOdata_LEP_full_Control_wider$meanUnexpected, paired = TRUE)
+```
+:::
+
+:::
